@@ -1,0 +1,74 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+/**
+ * The Hack Central Processing unit (CPU).
+ * Parses the binary code in the instruction input and executes it according to the
+ * Hack machine language specification. In the case of a C-instruction, computes the
+ * function specified by the instruction. If the instruction specifies to read a memory
+ * value, the inM input is expected to contain this value. If the instruction specifies
+ * to write a value to the memory, sets the outM output to this value, sets the addressM
+ * output to the target address, and asserts the writeM output (when writeM == 0, any
+ * value may appear in outM).
+ * If the reset input is 0, computes the address of the next instruction and sets the
+ * pc output to that value. If the reset input is 1, sets pc to 0.
+ * Note: The outM and writeM outputs are combinational: they are affected by the
+ * instruction's execution during the current cycle. The addressM and pc outputs are
+ * clocked: although they are affected by the instruction's execution, they commit to
+ * their new values only in the next cycle.
+ */
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to restart the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // Address of next instruction
+
+    PARTS:
+
+    // Type of Instruction
+    Not (in=instruction[15], out=Ainstruction);  // MSB ist 0 -> A-Instruction
+    Not (in=Ainstruction, out=Cinstruction);     // Negieren vorheriges -> MSB ist 1 -> C-Instruction
+
+    And (a=Cinstruction, b=instruction[5], out=ALUtoA);  // C-inst und dest zu A-Reg? instruction[5] -> da diese Stelle = d1 Bit (Ziel ist irgendwas mit A-Reg)
+    Mux16 (a=instruction, b=ALUout, sel=ALUtoA, out=ARegIn);
+
+    Or (a=Ainstruction, b=ALUtoA, out=loadA);           // lade A wenn A-inst oder C-inst & dest -> A-reg
+    ARegister (in=ARegIn, load=loadA, out=Aout);
+
+    Mux16 (a=Aout, b=inM, sel=instruction[12], out=AMout);      // instruction[12] ist a-Bit -> A oder M davon abhängig wählen
+
+    And (a=Cinstruction, b=instruction[4], out=loadD);          // instruction[4] ist Bit ob D-reg oder nicht
+    DRegister (in=ALUout, load=loadD, out=Dout);                // D-reg von ALU laden
+
+    ALU (x=Dout, y=AMout, zx=instruction[11], nx=instruction[10],
+        zy=instruction[9], ny=instruction[8], f=instruction[7],
+        no=instruction[6], zr=ZRout, ng=NGout, out=ALUout);
+    
+
+    // Set outputs for writing memory
+    Or16 (a=false, b=Aout, out[0..14]=addressM);
+    Or16 (a=false, b=ALUout, out=outM);
+    And (a=Cinstruction, b=instruction[3], out=writeM);
+
+    // calc PCload & PCinc - ob PC mit A reg geladen werden soll
+    And (a=ZRout, b=instruction[1], out=jeq);                   // ist 0 und jump wenn = 0 (->instruction[1])
+    And (a=NGout, b=instruction[2], out=jlt);                   // ist negativ und jump wenn negativ (->instruction[2])
+
+    Or (a=ZRout, b=NGout, out=zeroORnegative);
+    Not (in=zeroORnegative, out=positive);
+
+    And (a=positive, b=instruction[0], out=jgt);                // ist positiv und jump wenn positiv
+    Or (a=jlt, b=jeq, out=jle);
+    Or (a=jle, b=jgt, out=jumpToA);                             // PC laden wenn Bedingung erfüllt und jump wenn Bedingung
+    And (a=Cinstruction, b=jumpToA, out=PCload);                // Nur jump wenn C-inst
+    Not (in=PCload, out=PCinc);                                 // Nur inc wenn nicht load 
+    PC (in=Aout, inc=PCinc, load=PCload, reset=reset, out[0..14]=pc);
+}
